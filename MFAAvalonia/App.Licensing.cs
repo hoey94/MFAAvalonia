@@ -4,6 +4,7 @@ using System.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Threading;
+using MFAAvalonia.Extensions;
 using MFAAvalonia.Extensions.MaaFW;
 using MFAAvalonia.Helper;
 using MFAAvalonia.Helper.Licensing;
@@ -25,7 +26,6 @@ public partial class App
             InitializeAuthorizedApplication();
             return;
         }
-
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
             var gate = new LicenseWindow();
@@ -55,7 +55,6 @@ public partial class App
             InitializeAuthorizedApplication();
             if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
             {
-                // Replace the main window before closing the activation window.
                 var shutdownMode = desktop.ShutdownMode;
                 desktop.ShutdownMode = ShutdownMode.OnExplicitShutdown;
                 try
@@ -83,38 +82,44 @@ public partial class App
     {
         if (_licenseShutdownInProgress) return;
         _licenseShutdownInProgress = true;
+        var processors = _authorizedApplicationStarted ? MaaProcessor.Processors.ToArray() : Array.Empty<MaaProcessor>();
+        // Begin native cleanup before touching presentation code. A notice/tray failure must
+        // not skip stopping existing taskers, screenshots or agent processes.
+        var stopping = Task.WhenAll(processors.Select(processor => Task.Run(() =>
+        {
+            try { processor.SetTasker(null, requireAllStopped: true); }
+            catch (Exception ex)
+            {
+                LoggerHelper.Warning($"License shutdown could not stop an instance: {ex.GetType().Name}");
+            }
+        })));
         try
         {
-            GlobalHotkeyService.Shutdown();
-            TrayIconManager.DisposeTrayIcon(this);
-            if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
+            try { GlobalHotkeyService.Shutdown(); }
+            catch (Exception ex) { LoggerHelper.Warning($"License hotkey shutdown: {ex.GetType().Name}"); }
+            try { TrayIconManager.DisposeTrayIcon(this); }
+            catch (Exception ex) { LoggerHelper.Warning($"License tray shutdown: {ex.GetType().Name}"); }
+            try
             {
-                foreach (var window in desktop.Windows.ToArray()) window.IsEnabled = false;
-                var notice = new LicenseWindow();
-                desktop.MainWindow = notice;
-                notice.Show();
-            }
-            else if (ApplicationLifetime is ISingleViewApplicationLifetime singleView)
-            {
-                singleView.MainView = new LicensePanel();
-            }
-
-            if (_authorizedApplicationStarted)
-            {
-                Instances.PersistRuntimeState();
-                var processors = MaaProcessor.Processors.ToArray();
-                // Stop native taskers, screenshots and agents, not merely their UI buttons.
-                var stops = processors.Select(processor => Task.Run(() =>
+                if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
                 {
-                    try { processor.SetTasker(null, requireAllStopped: true); }
-                    catch (Exception ex)
-                    {
-                        LoggerHelper.Warning($"License shutdown could not stop an instance: {ex.GetType().Name}");
-                    }
-                }));
-                await Task.WhenAll(stops).WaitAsync(TimeSpan.FromSeconds(10));
-                foreach (var processor in processors) processor.Dispose();
+                    foreach (var window in desktop.Windows.ToArray()) window.IsEnabled = false;
+                    var notice = new LicenseWindow();
+                    desktop.MainWindow = notice;
+                    notice.Show();
+                }
+                else if (ApplicationLifetime is ISingleViewApplicationLifetime singleView)
+                {
+                    singleView.MainView = new LicensePanel();
+                }
+                if (_authorizedApplicationStarted) Instances.PersistRuntimeState();
             }
+            catch (Exception ex)
+            {
+                LoggerHelper.Warning($"License lock-screen update failed: {ex.GetType().Name}");
+            }
+            await stopping.WaitAsync(TimeSpan.FromSeconds(10));
+            foreach (var processor in processors) processor.Dispose();
             await Task.Delay(TimeSpan.FromSeconds(2));
         }
         catch (Exception ex)
