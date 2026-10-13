@@ -8,6 +8,7 @@ using MFAAvalonia.Configuration;
 using MFAAvalonia.Extensions;
 using MFAAvalonia.Extensions.MaaFW;
 using MFAAvalonia.Helper;
+using MFAAvalonia.Helper.Licensing;
 using MFAAvalonia.ViewModels.Other;
 using MFAAvalonia.ViewModels.Pages;
 using MFAAvalonia.ViewModels.UsersControls;
@@ -142,27 +143,19 @@ public partial class App : Application
             base.Initialize();
             AppPaths.Initialize();
             LoggerHelper.InitializeLogger();
-            if (!IsRuntimeMissingMode && !IsTempDirMode)
-            {
-                MaaProcessor.StartInterfacePreload();
-            }
             AppPaths.CleanupObsoleteExecutableBackups(
                 message => LoggerHelper.Info(message),
                 message => LoggerHelper.Warning(message));
             AvaloniaXamlLoader.Load(this);
             LanguageHelper.Initialize();
             ConfigurationManager.Initialize();
-            SystemSleepHelper.ApplyPreventSleep();
             FontService.Initialize();
 
-            // 保存引用以便在退出时正确释放
-            _memoryCracker = new AvaloniaMemoryCracker();
-            _memoryCracker.Cracker();
-
-            GlobalHotkeyService.Initialize();
-            TaskScheduler.UnobservedTaskException += TaskScheduler_UnobservedTaskException; //Task线程内未捕获异常处理事件
-            AppDomain.CurrentDomain.UnhandledException += CurrentDomain_UnhandledException; //非UI线程内未捕获异常处理事件
-            Dispatcher.UIThread.UnhandledException += OnDispatcherUnhandledException; //UI线程内未捕获异常处理事件
+            // Only infrastructure required by the authorization UI is initialized here.
+            // Native processors, hotkeys and automatic tasks are deferred until authorization.
+            TaskScheduler.UnobservedTaskException += TaskScheduler_UnobservedTaskException;
+            AppDomain.CurrentDomain.UnhandledException += CurrentDomain_UnhandledException;
+            Dispatcher.UIThread.UnhandledException += OnDispatcherUnhandledException;
         }
         catch (Exception ex)
         {
@@ -170,7 +163,6 @@ public partial class App : Application
             ShowStartupErrorAndExit(ex, "应用初始化");
         }
     }
-
 
     public override void OnFrameworkInitializationCompleted()
     {
@@ -196,102 +188,7 @@ public partial class App : Application
                 return;
             }
 
-            if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
-            {
-                desktop.ShutdownRequested += OnShutdownRequested;
-                var services = new ServiceCollection();
-
-                services.AddSingleton(desktop);
-
-                ConfigureServices(services);
-
-                var views = ConfigureViews(services);
-
-                Services = services.BuildServiceProvider();
-
-                MaaProcessorManager.Instance.LoadInstanceConfig();
-                if (!OperatingSystem.IsAndroid())
-                {
-                    TelemetryService.InitializeFromInterface();
-
-                    // 启动懒加载：先加载 ActiveTab，再加载有定时任务的，最后加载其余
-                    _ = MaaProcessorManager.Instance.StartLazyLoadingAsync();
-                }
-
-                DataTemplates.Add(new ViewLocator(views));
-
-                var window = views.CreateView<RootViewModel>(Services) as Window;
-
-                desktop.MainWindow = window;
-
-                TrayIconManager.InitializeTrayIcon(this, Instances.RootView, Instances.RootViewModel);
-
-                if (GlobalConfiguration.HasFileAccessError)
-                {
-                    var reason = (GlobalConfiguration.LastFileAccessErrorMessage ?? string.Empty).Trim();
-                    if (string.IsNullOrWhiteSpace(reason))
-                    {
-                        reason = "GlobalConfigFileReasonUnknown".ToLocalization();
-                    }
-                    var message = "GlobalConfigFileAccessError".ToLocalizationFormatted(false, GlobalConfiguration.ConfigPath, reason);
-                    DispatcherHelper.PostOnMainThread(() =>
-                        Instances.DialogManager.CreateDialog()
-                            .OfType(NotificationType.Error)
-                            .WithContent(message)
-                            .WithActionButton(LangKeys.Ok.ToLocalization(), _ => { }, true)
-                            .TryShow());
-                }
-            }
-            else if (ApplicationLifetime is ISingleViewApplicationLifetime singleView)
-            {
-                var services = new ServiceCollection();
-
-                services.AddSingleton(singleView);
-
-                ConfigureServices(services);
-
-                var views = ConfigureViews(services);
-
-                Services = services.BuildServiceProvider();
-
-                MaaProcessorManager.Instance.LoadInstanceConfig();
-                if (!OperatingSystem.IsAndroid())
-                {
-                    TelemetryService.InitializeFromInterface();
-
-                    // 启动懒加载
-                    _ = MaaProcessorManager.Instance.StartLazyLoadingAsync();
-                }
-
-                DataTemplates.Add(new ViewLocator(views));
-
-                var mainView = views.CreateView<RootViewModel>(Services);
-
-                singleView.MainView = mainView;
-
-                if (OperatingSystem.IsAndroid())
-                {
-                    MaaProcessorManager.Instance.Current.InitializeData();
-                    TimerModel.Instance.RefreshInstanceList();
-                }
-
-                if (GlobalConfiguration.HasFileAccessError)
-                {
-                    var reason = (GlobalConfiguration.LastFileAccessErrorMessage ?? string.Empty).Trim();
-                    if (string.IsNullOrWhiteSpace(reason))
-                    {
-                        reason = "GlobalConfigFileReasonUnknown".ToLocalization();
-                    }
-                    var message = "GlobalConfigFileAccessError".ToLocalizationFormatted(false, GlobalConfiguration.ConfigPath, reason);
-                    DispatcherHelper.PostOnMainThread(() =>
-                        Instances.DialogManager.CreateDialog()
-                            .OfType(NotificationType.Error)
-                            .WithContent(message)
-                            .WithActionButton(LangKeys.Ok.ToLocalization(), _ => { }, true)
-                            .TryShow());
-                }
-            }
-
+            InitializeLicenseGate();
             base.OnFrameworkInitializationCompleted();
         }
         catch (Exception ex)
@@ -301,28 +198,119 @@ public partial class App : Application
         }
     }
 
+    private void InitializeAuthorizedApplication()
+    {
+        if (_authorizedApplicationStarted) return;
+        LicenseRuntime.RequireAuthorized();
+        _authorizedApplicationStarted = true;
+        MaaProcessor.StartInterfacePreload();
+        SystemSleepHelper.ApplyPreventSleep();
+        _memoryCracker = new AvaloniaMemoryCracker();
+        _memoryCracker.Cracker();
+        GlobalHotkeyService.Initialize();
+
+        if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
+        {
+            desktop.ShutdownRequested += OnShutdownRequested;
+            var services = new ServiceCollection();
+            services.AddSingleton(desktop);
+            ConfigureServices(services);
+            var views = ConfigureViews(services);
+            Services = services.BuildServiceProvider();
+
+            MaaProcessorManager.Instance.LoadInstanceConfig();
+            if (!OperatingSystem.IsAndroid())
+            {
+                TelemetryService.InitializeFromInterface();
+                // 启动懒加载：先加载 ActiveTab，再加载有定时任务的，最后加载其余
+                _ = MaaProcessorManager.Instance.StartLazyLoadingAsync();
+            }
+
+            DataTemplates.Add(new ViewLocator(views));
+            var window = views.CreateView<RootViewModel>(Services) as Window;
+            desktop.MainWindow = window;
+            TrayIconManager.InitializeTrayIcon(this, Instances.RootView, Instances.RootViewModel);
+
+            if (GlobalConfiguration.HasFileAccessError)
+            {
+                var reason = (GlobalConfiguration.LastFileAccessErrorMessage ?? string.Empty).Trim();
+                if (string.IsNullOrWhiteSpace(reason))
+                {
+                    reason = "GlobalConfigFileReasonUnknown".ToLocalization();
+                }
+                var message = "GlobalConfigFileAccessError".ToLocalizationFormatted(false, GlobalConfiguration.ConfigPath, reason);
+                DispatcherHelper.PostOnMainThread(() =>
+                    Instances.DialogManager.CreateDialog()
+                        .OfType(NotificationType.Error)
+                        .WithContent(message)
+                        .WithActionButton(LangKeys.Ok.ToLocalization(), _ => { }, true)
+                        .TryShow());
+            }
+        }
+        else if (ApplicationLifetime is ISingleViewApplicationLifetime singleView)
+        {
+            var services = new ServiceCollection();
+            services.AddSingleton(singleView);
+            ConfigureServices(services);
+            var views = ConfigureViews(services);
+            Services = services.BuildServiceProvider();
+
+            MaaProcessorManager.Instance.LoadInstanceConfig();
+            if (!OperatingSystem.IsAndroid())
+            {
+                TelemetryService.InitializeFromInterface();
+                _ = MaaProcessorManager.Instance.StartLazyLoadingAsync();
+            }
+
+            DataTemplates.Add(new ViewLocator(views));
+            var mainView = views.CreateView<RootViewModel>(Services);
+            singleView.MainView = mainView;
+
+            if (OperatingSystem.IsAndroid())
+            {
+                MaaProcessorManager.Instance.Current.InitializeData();
+                TimerModel.Instance.RefreshInstanceList();
+            }
+
+            if (GlobalConfiguration.HasFileAccessError)
+            {
+                var reason = (GlobalConfiguration.LastFileAccessErrorMessage ?? string.Empty).Trim();
+                if (string.IsNullOrWhiteSpace(reason))
+                {
+                    reason = "GlobalConfigFileReasonUnknown".ToLocalization();
+                }
+                var message = "GlobalConfigFileAccessError".ToLocalizationFormatted(false, GlobalConfiguration.ConfigPath, reason);
+                DispatcherHelper.PostOnMainThread(() =>
+                    Instances.DialogManager.CreateDialog()
+                        .OfType(NotificationType.Error)
+                        .WithContent(message)
+                        .WithActionButton(LangKeys.Ok.ToLocalization(), _ => { }, true)
+                        .TryShow());
+            }
+        }
+    }
 
     private void OnShutdownRequested(object sender, ShutdownRequestedEventArgs e)
     {
+        LicenseRuntime.StopMonitoring();
+        LicenseRuntime.AuthorizationLost -= OnAuthorizationLost;
         TelemetryService.Shutdown();
         TrayIconManager.DisposeTrayIcon(this);
 
-        Instances.PersistRuntimeState();
-
-        foreach (var p in MaaProcessor.Processors)
+        if (_authorizedApplicationStarted && !_licenseShutdownInProgress)
         {
-            p.SetTasker();
+            Instances.PersistRuntimeState();
+            foreach (var p in MaaProcessor.Processors)
+            {
+                p.SetTasker();
+            }
         }
         GlobalHotkeyService.Shutdown();
 
         // 强制清理所有应用资源（包括字体）
         ForceCleanupAllResources();
-
-        // 释放内存优化器
         _memoryCracker?.Dispose();
         _memoryCracker = null;
-
-        // 取消全局异常事件订阅，避免内存泄漏
         TaskScheduler.UnobservedTaskException -= TaskScheduler_UnobservedTaskException;
         AppDomain.CurrentDomain.UnhandledException -= CurrentDomain_UnhandledException;
         Dispatcher.UIThread.UnhandledException -= OnDispatcherUnhandledException;
@@ -367,9 +355,7 @@ public partial class App : Application
 
     private static ViewsHelper ConfigureViews(ServiceCollection services)
     {
-
         var views = new ViewsHelper();
-
         if (OperatingSystem.IsAndroid())
         {
             views.AddView<RootViewMobile, RootViewModel>(services);
@@ -380,7 +366,6 @@ public partial class App : Application
         }
 
         return views
-
             // Add pages
             .AddView<InstanceContainerView, InstanceTabBarViewModel>(services)
             .AddView<TaskQueueView, TaskQueueViewModel>(services)
@@ -388,7 +373,6 @@ public partial class App : Application
             .AddView<ResourcesView, ResourcesViewModel>(services)
             .AddView<SettingsView, SettingsViewModel>(services)
             .AddView<ScreenshotView, ScreenshotViewModel>(services)
-
             // Add additional views
             .AddView<AddTaskDialogView, AddTaskDialogViewModel>(services)
             .AddView<TaskRemarkDialogView, TaskRemarkDialogViewModel>(services)
@@ -413,6 +397,7 @@ public partial class App : Application
 
     private static void ConfigureServices(ServiceCollection services)
     {
+        services.AddSingleton<ILicenseService>(LicenseRuntime.Service);
         services.AddSingleton<ISukiToastManager, SukiToastManager>();
         services.AddSingleton<ISukiDialogManager, SukiDialogManager>();
     }
@@ -538,6 +523,11 @@ public partial class App : Application
     private bool TryIgnoreException(Exception ex, out string errorMessage)
     {
         errorMessage = string.Empty;
+        if (ex is LicenseRequiredException)
+        {
+            errorMessage = "软件授权无效，已阻止任务执行。";
+            return true;
+        }
 
         // 递归检查InnerException
         if (ex.InnerException != null && TryIgnoreException(ex.InnerException, out errorMessage))
@@ -649,7 +639,7 @@ public partial class App : Application
         if (System.Threading.Interlocked.CompareExchange(ref _hasShownStartupError, 1, 0) != 0)
         {
             // 已经有其他线程在显示错误对话框，直接退出
-            System.Threading.Thread.Sleep(100); // 等待一下让第一个线程显示对话框
+            System.Threading.Thread.Sleep(100);
             Environment.Exit(1);
             return;
         }
@@ -676,7 +666,6 @@ public partial class App : Application
                 format = "{0}失败\n\n错误信息：\n{1}\n\n详细信息：\n{2}";
 
             var message = string.Format(format, stage, exception.Message, exception);
-
             string? downloadUrl = null;
 
             // Windows: 检测 MSVC 2022 缺失问题
@@ -700,7 +689,6 @@ public partial class App : Application
                         var missingLibrarySummary = string.IsNullOrWhiteSpace(diagnosis.MissingLibrarySummary)
                             ? "MaaFramework.dll"
                             : diagnosis.MissingLibrarySummary;
-
                         var expectedRuntimeDirectory = string.IsNullOrWhiteSpace(diagnosis.ExpectedRuntimeDirectory)
                             ? Path.Combine(AppContext.BaseDirectory, "runtimes")
                             : diagnosis.ExpectedRuntimeDirectory;
@@ -717,8 +705,6 @@ public partial class App : Application
                             {
                                 var win = new RuntimeMissingWindow();
                                 win.Show();
-
-                                // 启动消息循环等待窗口关闭（窗口内部处理下载和退出）
                                 var cts = new System.Threading.CancellationTokenSource();
                                 win.Closed += (s, e) => cts.Cancel();
                                 Dispatcher.UIThread.MainLoop(cts.Token);
@@ -746,7 +732,7 @@ public partial class App : Application
                                     }
                                 });
 
-                                if (tcs.Task.Wait(15000)) // 等待15秒防止死锁
+                                if (tcs.Task.Wait(15000))
                                 {
                                     Environment.Exit(1);
                                     return;
@@ -756,7 +742,6 @@ public partial class App : Application
                         catch (Exception ex)
                         {
                             LoggerHelper.Error($"无法显示 RuntimeMissingWindow: {ex}");
-                            // 尝试显示自定义下载窗口
                             try
                             {
                                 // 如果我们在UI线程且App正常，直接显示
@@ -765,13 +750,10 @@ public partial class App : Application
                                     var win = new RuntimeMissingWindow();
                                     win.Closed += (s, e) => Environment.Exit(1);
                                     win.Show();
-                                    // 启动嵌套循环以阻塞退出
                                     Dispatcher.UIThread.MainLoop(System.Threading.CancellationToken.None);
                                     return;
                                 }
-
-                                // 当 SkiaSharp 等底层渲染库缺失时，Avalonia 无法启动 UI，因此 RuntimeMissingWindow 也无法显示。
-                                // 这里不再尝试无效的重启，而是直接回退到原生消息框，并确保消息框内容友好。
+                                // SkiaSharp 等底层组件缺失时，回退到原生消息框。
                             }
                             catch
                             {
@@ -779,9 +761,6 @@ public partial class App : Application
                             }
 
                             downloadUrl = "https://aka.ms/vs/17/release/vc_redist.x64.exe";
-
-                            // 优化错误信息：如果是缺运行库，只显示友好提示，不显示吓人的堆栈信息
-                            // 这解决了“截图内容”问题
                             var msvcMsg = LanguageHelper.GetLocalizedString("MSVC2022Missing");
                             if (string.IsNullOrEmpty(msvcMsg) || msvcMsg == "MSVC2022Missing")
                                 msvcMsg = "检测到缺少运行库 Runtime，请尝试下载并安装最新 Microsoft Visual C++ Redistributable (x64) 运行库。";
@@ -794,26 +773,20 @@ public partial class App : Application
                             if (string.IsNullOrEmpty(confirmStr) || confirmStr == "DownloadNowConfirmation")
                                 confirmStr = "是否立即下载？";
 
-                            // 重写 message，仅包含友好提示
                             message = $"{msvcMsg}\n{link}\n\n{confirmStr}";
                         }
                     }
 
-                    // 输出到控制台（作为备份）
                     Console.Error.WriteLine($"=== MFAAvalonia {title} ===");
                     Console.Error.WriteLine(message);
-
                     if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
                     {
-                        // Windows: 使用 MessageBox
                         var shortMessage = message.Length > 2048
                             ? message.Substring(0, 2048) + "...\n\n(Log truncated)"
                             : message;
-
                         if (downloadUrl != null)
                         {
-                            // MB_YESNO | MB_ICONERROR = 0x04 | 0x10 = 0x14
-                            if (MessageBox(IntPtr.Zero, shortMessage, $"MFAAvalonia {title}", 0x14) == 6) // IDYES = 6
+                            if (MessageBox(IntPtr.Zero, shortMessage, $"MFAAvalonia {title}", 0x14) == 6)
                             {
                                 Process.Start(new ProcessStartInfo(downloadUrl)
                                 {
@@ -823,7 +796,7 @@ public partial class App : Application
                         }
                         else
                         {
-                            MessageBox(IntPtr.Zero, shortMessage, $"MFAAvalonia {title}", 0x10); // MB_ICONERROR
+                            MessageBox(IntPtr.Zero, shortMessage, $"MFAAvalonia {title}", 0x10);
                         }
                     }
                 }
@@ -832,8 +805,7 @@ public partial class App : Application
                     var shortMessage = message.Length > 2048
                         ? message.Substring(0, 2048) + "...\n\n(Log truncated)"
                         : message;
-
-                    MessageBox(IntPtr.Zero, shortMessage, $"MFAAvalonia {title}", 0x10); // MB_ICONERROR
+                    MessageBox(IntPtr.Zero, shortMessage, $"MFAAvalonia {title}", 0x10);
                 }
             }
             else
@@ -856,7 +828,6 @@ public partial class App : Application
                     }
                     else if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
                     {
-                        // 尝试 zenity
                         try
                         {
                             var psi = new ProcessStartInfo
@@ -869,7 +840,6 @@ public partial class App : Application
                         }
                         catch
                         {
-                            // 尝试 kdialog
                             var psi = new ProcessStartInfo
                             {
                                 FileName = "kdialog",
@@ -906,7 +876,6 @@ public partial class App : Application
         var expectedRuntimeDirectory = GetExpectedMaaNativeRuntimeDirectory();
         var expectedMaaLibraries = GetExpectedMaaNativeLibraries();
         var primaryMaaLibrary = GetPrimaryMaaNativeLibraryName();
-
         var allExceptions = EnumerateExceptions(exception).ToList();
         var joinedText = string.Join(Environment.NewLine, allExceptions.Select(ex => ex.ToString()));
         var isLikelyMaaLoadFailure = allExceptions.Any(IsLikelyMaaLoadFailure);
@@ -916,7 +885,6 @@ public partial class App : Application
             .Where(name => IsMaaRelatedLibraryName(name, expectedMaaLibraries))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
-
         if (isLikelyMaaLoadFailure)
         {
             missingLibraryNames.AddRange(expectedMaaLibraries
@@ -927,7 +895,6 @@ public partial class App : Application
             .Where(name => !LibraryExistsInKnownSearchPaths(name, expectedRuntimeDirectory))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
-
         var isVisualCppRuntimeMissing =
             isLikelyMaaLoadFailure &&
             actuallyMissingLibraries.Count == 0 &&
@@ -958,7 +925,6 @@ public partial class App : Application
         var visited = new HashSet<Exception>();
         var stack = new Stack<Exception>();
         stack.Push(exception);
-
         while (stack.Count > 0)
         {
             var current = stack.Pop();
@@ -966,9 +932,7 @@ public partial class App : Application
             {
                 continue;
             }
-
             yield return current;
-
             if (current is AggregateException aggregateException)
             {
                 foreach (var inner in aggregateException.InnerExceptions)
@@ -976,7 +940,6 @@ public partial class App : Application
                     stack.Push(inner);
                 }
             }
-
             if (current.InnerException != null)
             {
                 stack.Push(current.InnerException);
@@ -990,7 +953,6 @@ public partial class App : Application
         var isLoadException = exception is DllNotFoundException or FileNotFoundException or BadImageFormatException or TypeInitializationException ||
                               text.Contains("DllNotFoundException", StringComparison.OrdinalIgnoreCase) ||
                               text.Contains("FileNotFoundException", StringComparison.OrdinalIgnoreCase);
-
         return isLoadException &&
                (text.Contains("MaaFramework", StringComparison.OrdinalIgnoreCase) ||
                 text.Contains("MaaCore", StringComparison.OrdinalIgnoreCase) ||
@@ -1006,7 +968,6 @@ public partial class App : Application
         {
             yield return Path.GetFileName(fileNotFoundException.FileName);
         }
-
         foreach (Match match in Regex.Matches(exception.ToString(), @"(?i)\b[\w\.-]*Maa[\w\.-]*\.dll\b"))
         {
             if (!string.IsNullOrWhiteSpace(match.Value))
@@ -1022,7 +983,6 @@ public partial class App : Application
         {
             return false;
         }
-
         return expectedMaaLibraries.Contains(libraryName, StringComparer.OrdinalIgnoreCase) ||
                libraryName.Contains("Maa", StringComparison.OrdinalIgnoreCase);
     }
@@ -1035,7 +995,6 @@ public partial class App : Application
             Path.Combine(AppContext.BaseDirectory, "libs"),
             expectedRuntimeDirectory,
         };
-
         return searchDirectories.Any(directory =>
         {
             try
@@ -1064,17 +1023,14 @@ public partial class App : Application
         {
             return "win";
         }
-
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
         {
             return "linux";
         }
-
         if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
         {
             return "osx";
         }
-
         return "unknown";
     }
 
@@ -1092,7 +1048,6 @@ public partial class App : Application
         {
             return libraries;
         }
-
         return Array.Empty<string>();
     }
 }
