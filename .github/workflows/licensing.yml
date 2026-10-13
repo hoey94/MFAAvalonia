@@ -1,0 +1,44 @@
+name: Licensing validation
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: licensing-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Licensing (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            rid: linux-x64
+          - os: windows-latest
+            rid: win-x64
+          - os: macos-latest
+            rid: osx-arm64
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+      - name: Run isolated licensing regression tests
+        run: dotnet run --project tests/MFAAvalonia.Licensing.Tests/MFAAvalonia.Licensing.Tests.csproj --configuration Release
+      - name: Build author-only issuer
+        run: dotnet build tools/MFAAvalonia.LicenseIssuer/MFAAvalonia.LicenseIssuer.csproj --configuration Release
+      - name: Build desktop application and compiled XAML
+        run: dotnet build MFAAvalonia.Desktop/MFAAvalonia.Desktop.csproj --configuration Release --runtime ${{ matrix.rid }}

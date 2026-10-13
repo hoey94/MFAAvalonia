@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using MFAAvalonia.Configuration;
 using MFAAvalonia.Extensions.MaaFW;
 using MFAAvalonia.Helper;
+using MFAAvalonia.Helper.Licensing;
 
 namespace MFAAvalonia.Extensions;
 
@@ -19,6 +20,7 @@ internal static class GlobalStartManager
     {
         try
         {
+            LicenseRuntime.RequireAuthorized();
             var manager = MaaProcessorManager.Instance;
             var instances = manager.GetAllInstanceIdsAndNames()
                 .Where(instance => IsInstanceIncluded(manager, instance.Id))
@@ -84,6 +86,7 @@ internal static class GlobalStartManager
     {
         try
         {
+            LicenseRuntime.RequireAuthorized();
             if (string.IsNullOrWhiteSpace(item.Path) || !File.Exists(item.Path))
             {
                 LoggerHelper.Warning($"全局启动：额外启动项 {item.Name} 的路径无效，已跳过: {item.Path}");
@@ -113,6 +116,7 @@ internal static class GlobalStartManager
     {
         try
         {
+            LicenseRuntime.RequireAuthorized();
             var manager = MaaProcessorManager.Instance;
             manager.EnsureInstanceLoaded(instanceId);
             var vm = manager.GetViewModel(instanceId);
@@ -131,12 +135,14 @@ internal static class GlobalStartManager
             var beforeTask = vm.Processor.InstanceConfiguration.GetValue(ConfigurationKeys.BeforeTask, "None");
             if (beforeTask.Contains("StartupSoftware", StringComparison.OrdinalIgnoreCase))
             {
+                LicenseRuntime.RequireAuthorized();
                 LoggerHelper.Info($"全局启动：按实例配置启动 {instanceName} 的目标程序");
                 await vm.Processor.StartSoftware();
             }
 
             await DispatcherHelper.RunOnMainThreadAsync(() =>
             {
+                LicenseRuntime.RequireAuthorized();
                 Instances.InstanceTabBarViewModel.SwitchToInstanceById(instanceId);
                 vm.TryReadAdbDeviceFromConfig(false, false, true, false);
                 vm.StartTask();

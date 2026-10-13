@@ -1,0 +1,68 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:suki="https://github.com/kikipoulet/SukiUI"
+             xmlns:vm="clr-namespace:MFAAvalonia.ViewModels.Windows"
+             x:Class="MFAAvalonia.Views.UserControls.LicensePanel"
+             x:DataType="vm:LicenseViewModel">
+    <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+        <StackPanel Margin="24" Spacing="20" MaxWidth="780" HorizontalAlignment="Stretch">
+            <StackPanel Spacing="6">
+                <TextBlock Text="软件授权" FontSize="28" FontWeight="SemiBold"
+                           Foreground="{DynamicResource SukiText}" />
+                <TextBlock Text="激活此设备，开启你的自动化工作空间。"
+                           TextWrapping="Wrap" Foreground="{DynamicResource SukiLowText}" />
+            </StackPanel>
+            <suki:GlassCard CornerRadius="18" Padding="22" Margin="0">
+                <StackPanel Spacing="14">
+                    <TextBlock Text="设备与激活" FontSize="17" FontWeight="SemiBold" />
+                    <StackPanel Spacing="6">
+                        <TextBlock Text="本机试用码" Foreground="{DynamicResource SukiLowText}" />
+                        <Grid ColumnDefinitions="*,Auto">
+                            <TextBox Text="{Binding TrialCode, Mode=OneWay}" IsReadOnly="True"
+                                     AutomationProperties.Name="本机试用激活码" />
+                            <Button Grid.Column="1" Margin="10,0,0,0" Content="复制"
+                                    Click="CopyTrial" AutomationProperties.Name="复制试用码" />
+                        </Grid>
+                    </StackPanel>
+                    <StackPanel Spacing="6">
+                        <TextBlock Text="机器码 · 发送给作者获取正式授权" TextWrapping="Wrap"
+                                   Foreground="{DynamicResource SukiLowText}" />
+                        <Grid ColumnDefinitions="*,Auto">
+                            <TextBox Text="{Binding MachineCode, Mode=OneWay}" IsReadOnly="True"
+                                     AutomationProperties.Name="机器码" />
+                            <Button Grid.Column="1" Margin="10,0,0,0" Content="复制"
+                                    Click="CopyMachine" AutomationProperties.Name="复制机器码" />
+                        </Grid>
+                    </StackPanel>
+                    <TextBox Text="{Binding ActivationKey}" Watermark="粘贴作者签发的激活码，或填入本机试用码"
+                             TextWrapping="Wrap" AcceptsReturn="False" MinHeight="76" MaxHeight="150"
+                             MaxLength="4096" IsEnabled="{Binding !IsBusy}"
+                             AutomationProperties.Name="激活密钥" />
+                    <WrapPanel Orientation="Horizontal">
+                        <Button Content="填入试用码" Command="{Binding FillTrialCommand}" Margin="0,0,12,8" />
+                        <Button Content="验证激活" Command="{Binding ActivateCommand}" Margin="0,0,0,8"
+                                Background="{DynamicResource SukiPrimaryColor}" Foreground="White"
+                                FontWeight="SemiBold" />
+                    </WrapPanel>
+                    <ProgressBar IsIndeterminate="True" IsVisible="{Binding IsBusy}" Height="3" />
+                    <TextBlock Text="{Binding Message}" TextWrapping="Wrap"
+                               Foreground="{DynamicResource SukiText}" />
+                </StackPanel>
+            </suki:GlassCard>
+            <suki:GlassCard CornerRadius="18" Padding="22" Margin="0">
+                <StackPanel Spacing="8">
+                    <TextBlock Text="{Binding StatusTitle}" FontSize="18" FontWeight="SemiBold"
+                               Foreground="{DynamicResource SukiPrimaryColor}" TextWrapping="Wrap" />
+                    <TextBlock Text="{Binding StatusDescription}" TextWrapping="Wrap"
+                               Foreground="{DynamicResource SukiLowText}" />
+                    <TextBlock Text="{Binding Remaining}" FontSize="30" FontWeight="Light" />
+                    <TextBlock Text="有效期至（本地时间）" Foreground="{DynamicResource SukiMuteText}" FontSize="12" />
+                    <TextBlock Text="{Binding ExpiresAt}" TextWrapping="Wrap" />
+                </StackPanel>
+            </suki:GlassCard>
+            <TextBlock Text="试用从首次验证成功开始，连续计时 2 小时。重启或再次填写试用码不会延长试用。正式授权与本机绑定；可在设置中随时查看状态或更新激活码。"
+                       TextWrapping="Wrap" LineHeight="21" FontSize="12"
+                       Foreground="{DynamicResource SukiMuteText}" />
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>
