@@ -1,4 +1,4 @@
-﻿<UserControl
+<UserControl
     d:DesignHeight="450"
     d:DesignWidth="1400"
     mc:Ignorable="d"
@@ -33,6 +33,11 @@
             <suki:SettingsLayout Name="SettingsLayout" ScrollAnimationSpeed="3" MinWidthWhetherStackSummaryShow="700"
                                  StackSummaryWidth="220">
                 <suki:SettingsLayout.Items>
+                    <suki:SettingsLayoutItem Header="软件授权">
+                        <suki:SettingsLayoutItem.Content>
+                            <userControls:LicensePanel />
+                        </suki:SettingsLayoutItem.Content>
+                    </suki:SettingsLayoutItem>
                     <suki:SettingsLayoutItem
                         Content="{extensions:ServiceProvider ServiceType={x:Type settings:ConfigurationMgrUserControl}}"
                         Header="{markup:I18n {x:Static helper:LangKeys.SwitchConfiguration}}" />
@@ -70,5 +75,4 @@
             </suki:SettingsLayout>
         </suki:SukiStackPage>
     </Grid>
-
 </UserControl>
