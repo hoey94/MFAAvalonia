@@ -7,7 +7,7 @@ namespace MFAAvalonia.Views.Windows;
 public partial class LicenseWindow : SukiWindow
 {
     public LicenseViewModel? ViewModel => LicenseContent.ViewModel;
-    public event EventHandler? Activated;
+    public event EventHandler? LicenseActivated;
 
     public LicenseWindow()
     {
@@ -19,5 +19,5 @@ public partial class LicenseWindow : SukiWindow
         };
     }
 
-    private void OnActivated(object? sender, EventArgs e) => Activated?.Invoke(this, e);
+    private void OnActivated(object? sender, EventArgs e) => LicenseActivated?.Invoke(this, e);
 }
