@@ -29,7 +29,7 @@ public partial class App
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
             var gate = new LicenseWindow();
-            gate.Activated += (_, _) => ContinueAfterActivation(gate);
+            gate.LicenseActivated += (_, _) => ContinueAfterActivation(gate);
             desktop.MainWindow = gate;
         }
         else if (ApplicationLifetime is ISingleViewApplicationLifetime singleView)
