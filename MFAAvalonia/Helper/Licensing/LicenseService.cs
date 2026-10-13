@@ -142,7 +142,8 @@ public sealed class LicenseService : ILicenseService
             string.IsNullOrWhiteSpace(record.ActivationKey) ||
             record.ActivationKey.Length > LicenseToken.MaximumKeyLength ||
             record.LastSeenUtc == default ||
-            record.TrialStartedAtUtc > record.LastSeenUtc)
+            record.TrialStartedAtUtc > record.LastSeenUtc ||
+            (record.ActivationKey == TrialCode && record.TrialStartedAtUtc is null))
             throw new InvalidDataException("Invalid license state.");
         return record;
     }
