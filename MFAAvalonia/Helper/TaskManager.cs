@@ -1,4 +1,4 @@
-﻿using MFAAvalonia.Helper;
+using MFAAvalonia.Helper.Licensing;
 using System;
 using System.Diagnostics;
 using System.Threading;
@@ -10,13 +10,16 @@ public static class TaskManager
 {
     private static string FormatTaskPrefix(string prompt, string name) => $"{prompt}任务 {name}";
 
+    private static void RunAuthorized(Action? action)
+    {
+        // Check inside the executing delegate, not only when work is queued.
+        LicenseRuntime.RequireAuthorized();
+        action?.Invoke();
+    }
+
     /// <summary>
     /// 执行任务, 并带有更好的日志显示
     /// </summary>
-    /// <param name="action">要执行的动作</param>
-    /// <param name="name">日志显示名称</param>
-    /// <param name="prompt">日志提示</param>
-    /// <param name="catchException">是否捕获异常</param>
     public static void RunTask(
         Action action,
         string name = nameof(Action),
@@ -26,19 +29,15 @@ public static class TaskManager
     {
         if (!noMessage)
             LoggerHelper.Info($"{FormatTaskPrefix(prompt, name)}开始。");
-
         if (catchException)
         {
-            try
-            {
-                action.Invoke();
-            }
+            try { RunAuthorized(action); }
             catch (Exception e)
             {
                 LoggerHelper.Error($"{FormatTaskPrefix(prompt, name)}执行失败：{e.Message}", e);
             }
         }
-        else action();
+        else RunAuthorized(action);
         if (!noMessage)
             LoggerHelper.Info($"{FormatTaskPrefix(prompt, name)}完成。");
     }
@@ -58,7 +57,7 @@ public static class TaskManager
             try
             {
                 token.ThrowIfCancellationRequested();
-                action?.Invoke();
+                RunAuthorized(action);
                 LoggerHelper.Info($"{FormatTaskPrefix(prompt, name)}完成（异步）。");
             }
             catch (Exception ex) when (catchException && !(ex is OperationCanceledException))
@@ -70,15 +69,6 @@ public static class TaskManager
         }, token);
     }
 
-    /// <summary>
-    /// 异步执行任务, 并带有更好的日志显示
-    /// </summary>
-    /// <param name="action">要执行的动作</param>
-    /// <param name="handleError">处理异常的方法</param>
-    /// <param name="name">任务名称</param>
-    /// <param name="prompt">日志提示</param>
-    /// <param name="catchException">是否捕获异常</param>
-    /// <param name="shouldLog">异常是否写入日志</param>
     public async static Task RunTaskAsync(
         Action? action,
         Action? handleError = null,
@@ -88,22 +78,20 @@ public static class TaskManager
         bool shouldLog = true)
     {
         LoggerHelper.Info($"{FormatTaskPrefix(prompt, name)}开始（异步）。");
-        if (catchException)
+        try
         {
-            var task = Task.Run(action);
-            await task.ContinueWith(t =>
-            {
-                if (t.Exception != null)
-                {
-                    handleError?.Invoke();
-                    if (shouldLog)
-                        LoggerHelper.Error($"{FormatTaskPrefix(prompt, name)}执行失败：{t.Exception.GetBaseException().Message}", t.Exception.GetBaseException());
-                }
-            }, TaskContinuationOptions.OnlyOnFaulted);
+            await Task.Run(() => RunAuthorized(action));
         }
-        else await Task.Run(action);
-
-        LoggerHelper.Info($"{FormatTaskPrefix(prompt, name)}完成（异步）。");
+        catch (Exception ex) when (catchException && ex is not OperationCanceledException)
+        {
+            handleError?.Invoke();
+            if (shouldLog)
+                LoggerHelper.Error($"{FormatTaskPrefix(prompt, name)}执行失败：{ex.GetBaseException().Message}", ex.GetBaseException());
+        }
+        finally
+        {
+            LoggerHelper.Info($"{FormatTaskPrefix(prompt, name)}完成（异步）。");
+        }
     }
 
     public async static Task RunTaskAsync(
@@ -117,6 +105,7 @@ public static class TaskManager
         LoggerHelper.Info($"{FormatTaskPrefix(prompt, name)}开始（异步）。");
         try
         {
+            LicenseRuntime.RequireAuthorized();
             if (action != null)
                 await action();
         }
@@ -148,7 +137,7 @@ public static class TaskManager
             await Task.Run(() =>
             {
                 token.ThrowIfCancellationRequested();
-                action?.Invoke();
+                RunAuthorized(action);
             }, token);
         }
         catch (Exception ex) when (catchException && !(ex is OperationCanceledException))
@@ -184,12 +173,12 @@ public static class TaskManager
             var result = await Task.Run(() =>
             {
                 token.ThrowIfCancellationRequested();
+                LicenseRuntime.RequireAuthorized();
                 return function();
             }, token);
 
             if (result is Task nestedTask)
                 await nestedTask;
-
             return result;
         }
         catch (Exception ex) when (catchException && !(ex is OperationCanceledException))
